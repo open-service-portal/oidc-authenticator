@@ -1,0 +1,31 @@
+{
+  "name": "oidc-authenticator",
+  "version": "1.0.0",
+  "description": "Client-side OIDC authentication daemon for backend services - browser-initiated auth flow",
+  "main": "lib/index.js",
+  "bin": {
+    "oidc-authenticator": "bin/cli.js"
+  },
+  "scripts": {
+    "start": "node bin/cli.js"
+  },
+  "keywords": [
+    "oidc",
+    "oauth",
+    "kubernetes",
+    "backstage",
+    "authentication",
+    "pkce"
+  ],
+  "author": "Open Service Portal",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {},
+  "devDependencies": {},
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/open-service-portal/oidc-authenticator.git"
+  }
+}

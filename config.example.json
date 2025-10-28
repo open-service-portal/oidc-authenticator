@@ -1,0 +1,8 @@
+{
+  "issuer": "https://your-oidc-provider.com/",
+  "clientId": "your-client-id-here",
+  "organizationId": "org_your-org-id",
+  "scopes": "openid profile email",
+  "callbackPort": 8000,
+  "backendUrl": "https://backstage.example.com"
+}
