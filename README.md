@@ -1,343 +1,238 @@
 # OIDC Authenticator
 
-**A lightweight authentication daemon that runs on your laptop and handles OIDC login for backend services.**
+Client-side OIDC authentication daemon for Kubernetes clusters and backend services.
 
 ## What is this?
 
-OIDC Authenticator solves the problem of authenticating with backend services that aren't publicly accessible (e.g., on a private network). Instead of your backend needing a public URL for OAuth callbacks, this tool:
+OIDC Authenticator runs on your laptop and handles OIDC/OAuth authentication flows locally, similar to `kubectl oidc-login`. Instead of requiring your backend to have a public URL for OAuth callbacks, this tool:
 
-- Runs as a daemon on your laptop
-- Opens `http://localhost:8000` when you want to log in
-- Handles the OIDC flow locally
-- Sends the tokens to your backend service
+- Runs as a daemon on `localhost:8000`
+- Handles PKCE OAuth flow client-side
+- Sends authentication tokens to your backend
+- Works on private networks (no public URL needed)
 
-Think of it like `kubectl oidc-login` but for any backend service (Backstage, APIs, custom apps, etc.).
+Perfect for Backstage, Kubernetes clusters, and custom applications.
 
 ## Quick Start
 
-### 1. Copy Configuration
+### 1. Configure
 
-```bash
-cd oidc-authenticator
-cp config.example.json config.json
-```
+Create `config.json`:
 
-Edit `config.json` with your OIDC provider and backend details:
 ```json
 {
   "issuer": "https://login.spot.rackspace.com/",
   "clientId": "YOUR_CLIENT_ID",
   "organizationId": "org_xxxxx",
-  "backendUrl": "https://your-backend.example.com"
+  "backendUrl": "http://localhost:7007"
 }
+```
+
+Or use environment variables:
+
+```bash
+export OIDC_ISSUER_URL="https://login.spot.rackspace.com/"
+export OIDC_CLIENT_ID="your_client_id"
+export OIDC_ORGANIZATION_ID="org_xxxxx"
 ```
 
 ### 2. Start Daemon
 
 ```bash
-node bin/cli.js --daemon --verbose
+node bin/cli.js start
 ```
 
-You'll see:
+Check if running:
+
+```bash
+node bin/cli.js status
 ```
-✅ OIDC authenticator daemon running on http://localhost:8000
-📤 Tokens will be sent to: https://your-backend.example.com
+
+Stop daemon:
+
+```bash
+node bin/cli.js stop
 ```
 
-### 3. Log In
+### 3. Authenticate
 
-Open http://localhost:8000 in your browser and log in with your OIDC provider. Done!
+**Option A: From Browser/UI**
+- Open http://localhost:8000
+- Complete authentication
+- Tokens sent to backend automatically
 
-## Usage
+**Option B: One-Off CLI**
+```bash
+node bin/cli.js --verbose
+```
 
-There are **two modes** of operation:
+## Commands
 
-### 1. Daemon Mode (Recommended for Production)
+```
+node bin/cli.js start [options]    # Start daemon in background
+node bin/cli.js stop               # Stop running daemon
+node bin/cli.js status             # Check if daemon is running
+node bin/cli.js [options]          # One-off authentication (runs once)
+node bin/cli.js --help             # Show help
+```
 
-**Use when:** You want the authenticator running continuously in the background.
+## Options
+
+```
+--issuer <url>          OIDC issuer URL (required)
+--client-id <id>        OAuth client ID (required)
+--organization <id>     Organization ID (optional, for Auth0)
+--backend-url <url>     Backend URL to send tokens to
+--scopes <scopes>       OAuth scopes (default: "openid profile email")
+--port <port>           Callback port (default: 8000)
+--output <file>         Save tokens to file (debugging)
+-v, --verbose           Show detailed output
+```
+
+## Features
+
+### Daemon Mode
+
+Long-running background process for persistent authentication:
 
 ```bash
 # Start daemon
-node bin/cli.js --daemon --verbose
+node bin/cli.js start --verbose
+
+# Use from application
+fetch('http://localhost:8000/health')  # Check if running
+window.open('http://localhost:8000')   # Trigger authentication
 ```
 
-**Behavior:**
-- ✅ Server starts immediately and **doesn't block**
-- ✅ Runs continuously, ready for multiple logins
-- ✅ You manually open `http://localhost:8000` when you want to login
-- ✅ Your app/frontend can trigger authentication via button/link
-- ♾️ Stays running until you stop it (Ctrl+C)
+### One-Off Mode
 
-**When to use:**
-- Production integration with web apps
-- Multiple authentication sessions
-- Long-running development sessions
-
-### 2. One-Time Mode (For Testing/Scripts)
-
-**Use when:** You need a single authentication, then exit.
+Single authentication that runs once and exits:
 
 ```bash
-# One-time authentication (no --daemon flag)
-node bin/cli.js \
-  --issuer https://login.spot.rackspace.com/ \
-  --client-id YOUR_CLIENT_ID \
-  --backend-url https://backstage.example.com \
-  --verbose
+node bin/cli.js --verbose --output /tmp/tokens.json
 ```
 
-**Behavior:**
-- ⏳ **Blocks** and waits for authentication to complete
-- 🌐 **Automatically opens browser** to OIDC provider
-- ✅ Completes authentication, outputs tokens
-- 🚪 **Exits immediately** after success/failure
-- ⏱️ Times out after 3 minutes
+### Verbose Mode
 
-**When to use:**
-- Testing authentication flow
-- One-off token retrieval
-- CI/CD pipelines
-- Debugging
-
-### Comparison
-
-| Feature | Daemon Mode | One-Time Mode |
-|---------|-------------|---------------|
-| Command | `--daemon` | No `--daemon` flag |
-| Blocks terminal? | ❌ No | ✅ Yes |
-| Opens browser? | ❌ Manual | ✅ Auto |
-| Multiple logins? | ✅ Yes | ❌ No |
-| Timeout | None | 3 minutes |
-| Use case | Production | Testing |
-
-### Check if Daemon is Running
+See detailed authentication flow including:
 
 ```bash
-# Health check
-curl http://localhost:8000/health
-
-# Returns: {"status":"running","issuer":"https://..."}
+node bin/cli.js start --verbose
 ```
 
-### Without Configuration File
+**Shows:**
+- Configuration details (issuer, client ID, scopes)
+- PKCE challenge generation
+- Authorization URL
+- Token exchange
+- **Decoded JWT claims** (email, name, expiration, etc.)
+- Access token type (JWT or JWE encrypted)
 
-Both modes can use command-line arguments instead of `config.json`:
+**Example output:**
+```
+🔐 Starting OIDC authentication...
+
+📍 Issuer: https://login.spot.rackspace.com/
+🔑 Client ID: mwG3lUMV8KyeMqHe4fJ5Bb3nM1vBvRNa
+🏢 Organization: org_zOuCBHiyF1yG8d1D
+📋 Scopes: openid profile email
+
+✅ PKCE challenge generated
+✅ Authorization URL built
+✅ Tokens obtained successfully!
+
+🔍 ID Token Claims:
+     email: user@example.com
+     name: John Doe
+     sub: auth0|123456
+     exp: 1761907570 (2025-10-31T10:46:10.000Z)
+```
+
+### JWT Token Decoding
+
+Automatically decodes and displays JWT token claims:
+- Subject (`sub`), Issuer (`iss`), Audience (`aud`)
+- User info (email, name, preferred_username)
+- Timestamps (issued at, expires, not before)
+- Recognizes JWE encrypted tokens
+
+## Use Cases
+
+### Kubernetes Cluster Authentication
+
+Authenticate with clusters using OIDC credentials:
 
 ```bash
-# Daemon mode
-node bin/cli.js --daemon \
-  --issuer https://login.spot.rackspace.com/ \
-  --client-id YOUR_CLIENT_ID \
-  --backend-url https://your-backend.example.com \
-  --verbose
+# Start daemon
+node bin/cli.js start
 
-# One-time mode
-node bin/cli.js \
-  --issuer https://login.spot.rackspace.com/ \
-  --client-id YOUR_CLIENT_ID \
-  --backend-url https://your-backend.example.com \
-  --verbose
+# Tokens available for kubectl/K8s API
+# Backend receives tokens via POST /api/cluster-auth/tokens
 ```
 
-## Backend Integration
+### Backstage Integration
 
-### Overview
-
-Your backend needs an endpoint to receive tokens from the OIDC Authenticator:
-
-```
-POST /api/auth/tokens
-Content-Type: application/json
-
-{
-  "access_token": "eyJhbGci...",
-  "id_token": "eyJhbGci...",
-  "refresh_token": "v1.MRrt...",
-  "token_type": "Bearer",
-  "expires_in": 86400
-}
-```
-
-### Frontend Integration
-
-In your web frontend, add a login button that checks if the daemon is running:
+Enable cluster authentication in Backstage:
 
 ```typescript
 // Check if daemon is running
-async function checkDaemonHealth(): Promise<boolean> {
-  try {
-    const response = await fetch('http://localhost:8000/health');
-    const data = await response.json();
-    return data.status === 'running';
-  } catch {
-    return false;
-  }
-}
+const health = await fetch('http://localhost:8000/health');
 
 // Trigger authentication
-async function handleOIDCLogin() {
-  const isDaemonRunning = await checkDaemonHealth();
+window.open('http://localhost:8000');
 
-  if (!isDaemonRunning) {
-    // Show instructions to start daemon
-    alert(
-      'OIDC Authenticator is not running.\n\n' +
-      'Please run:\n' +
-      'oidc-authenticator --daemon'
-    );
-    return;
-  }
-
-  // Open authentication page in new window
-  const authWindow = window.open('http://localhost:8000', '_blank');
-
-  // Optional: Poll for completion and refresh page
-  const pollInterval = setInterval(async () => {
-    // Check if user is now authenticated
-    const authenticated = await checkAuthStatus();
-    if (authenticated) {
-      clearInterval(pollInterval);
-      window.location.reload();
-    }
-  }, 2000);
-}
+// Backend receives tokens automatically
 ```
 
-### Backend Implementation
+### Custom Applications
 
-Create an endpoint to receive tokens from the daemon:
+Any backend service can use this for authentication:
 
-```typescript
-// Express example
-import { Router } from 'express';
+```bash
+# Configure backend URL
+node bin/cli.js start --backend-url https://api.example.com
 
-const router = Router();
-
-router.post('/api/auth/tokens', async (req, res) => {
-  const { access_token, id_token, refresh_token, expires_in } = req.body;
-
-  // Store tokens associated with user
-  // You might use the id_token to identify the user
-  // and store in session or database
-
-  try {
-    // Example: Store in session
-    req.session.oidcTokens = {
-      accessToken: access_token,
-      idToken: id_token,
-      refreshToken: refresh_token,
-      expiresAt: Date.now() + (expires_in * 1000)
-    };
-
-    res.json({ status: 'ok' });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
+# Tokens POSTed to https://api.example.com/api/cluster-auth/tokens
 ```
 
-### Example: Backstage Integration
-
-For Backstage specifically, you would create a plugin endpoint:
-
-```typescript
-// packages/backend/src/plugins/cluster-auth.ts
-export function createRouter(): Router {
-  const router = Router();
-  router.post('/api/cluster-auth/tokens', handleTokens);
-  return router;
-}
-```
-
-See `docs/` for more integration examples.
-
-## How It Works
+## Architecture
 
 ```
-┌─────────────────┐         ┌──────────────────┐         ┌─────────────────┐
-│   Your Laptop   │         │  OIDC Provider   │         │ Backend Server  │
-│                 │         │ (Auth0/Okta/etc) │         │                 │
-└─────────────────┘         └──────────────────┘         └─────────────────┘
-        │                            │                            │
-        │  1. Run daemon             │                            │
-        │  (localhost:8000)          │                            │
-        │                            │                            │
-        │  2. Open localhost:8000    │                            │
-        │─────────────┐              │                            │
-        │             │              │                            │
-        │  3. Redirect to OIDC       │                            │
-        │────────────────────────────>                            │
-        │                            │                            │
-        │  4. User logs in           │                            │
-        │<───────────────────────────>                            │
-        │                            │                            │
-        │  5. Redirect back          │                            │
-        │<───────────────────────────│                            │
-        │                            │                            │
-        │  6. Exchange code for tokens                            │
-        │─────────────┐              │                            │
-        │             │              │                            │
-        │  7. Send tokens to backend                              │
-        │────────────────────────────────────────────────────────>│
-        │                            │                            │
-        │  8. Success!               │                            │
+┌─────────────┐        ┌──────────────┐        ┌─────────────┐
+│   Browser   │───────>│     Daemon   │───────>│ OIDC        │
+│             │        │ (localhost)  │        │ Provider    │
+└─────────────┘        └──────────────┘        └─────────────┘
+      │                       │                        │
+      │                       │ PKCE Flow              │
+      │                       │<───────────────────────│
+      │                       │                        │
+      │                       ▼                        │
+      │              ┌──────────────┐                 │
+      │              │   Backend    │                 │
+      │              │   Service    │                 │
+      │              └──────────────┘                 │
+      │                                                │
+      └────────── Uses tokens for K8s/API ────────────┘
 ```
 
-**Key Points:**
-- Daemon runs on **your laptop** (not on backend server)
-- Uses **PKCE** for security (no client secret needed)
-- Works with **private backend** instances (no public URL required)
-- Tokens sent directly to your backend service
+## Security
 
-## CLI Options
-
-```
-Options:
-  --issuer <url>          OIDC issuer URL (required unless in config.json)
-  --client-id <id>        OAuth client ID (required unless in config.json)
-  --organization <id>     Organization ID (optional)
-  --backend-url <url>     Backend URL (required for normal operation)
-  --scopes <scopes>       Space-separated scopes (default: "openid profile email")
-  --port <port>           Callback port (default: 8000)
-  -d, --daemon            Run as daemon server (browser-initiated auth)
-  --output <file>         Save tokens to file (optional, for debugging)
-  -v, --verbose           Show detailed output
-  --help                  Show this help message
-```
+- **PKCE Flow**: Secure public client authentication (no client secret needed)
+- **Localhost Only**: Daemon binds to 127.0.0.1 (not accessible externally)
+- **State Validation**: CSRF protection built-in
+- **Token Validation**: Backend should verify JWT signatures
+- **Private Networks**: Works without public URLs
 
 ## API Endpoints
 
-### `GET /`
-**Initiates authentication flow**
+### Daemon
 
-When browser hits this endpoint:
-1. Generates fresh PKCE challenge
-2. Creates state parameter
-3. Redirects to OIDC provider authorization URL
+```
+GET  /health              - Health check
+GET  /                    - Initiate authentication
+```
 
-**Response:** `302 Redirect` to OIDC provider
-
----
-
-### `GET /?code=...&state=...`
-**Callback endpoint**
-
-Receives authorization code from OIDC provider:
-1. Validates state parameter
-2. Exchanges authorization code for tokens
-3. Sends tokens to Backstage backend
-4. Shows success page
-
-**Response:** HTML success page (auto-closes after 3 seconds)
-
----
-
-### `GET /health`
-**Health check endpoint**
-
-Returns daemon status. Used by Backstage frontend to check if daemon is running.
-
-**Response:**
+**Health Response:**
 ```json
 {
   "status": "running",
@@ -345,348 +240,114 @@ Returns daemon status. Used by Backstage frontend to check if daemon is running.
 }
 ```
 
-## Configuration
+### Backend (Expected)
 
-### Option 1: config.json (Recommended)
+Your backend should implement:
+
+```
+POST /api/cluster-auth/tokens    - Receive tokens from daemon
+```
+
+**Token Payload:**
+```json
+{
+  "access_token": "eyJ...",
+  "id_token": "eyJ...",
+  "refresh_token": "v1.MRr...",
+  "token_type": "Bearer",
+  "expires_in": 3600,
+  "scope": "openid profile email"
+}
+```
+
+## Configuration File
+
+All options can be set in `config.json`:
 
 ```json
 {
   "issuer": "https://login.spot.rackspace.com/",
   "clientId": "YOUR_CLIENT_ID",
   "organizationId": "org_xxxxx",
-  "backendUrl": "https://backstage.example.com",
+  "backendUrl": "http://localhost:7007",
+  "scopes": "openid profile email",
   "callbackPort": 8000
 }
 ```
 
-### Option 2: Environment Variables
+**Config Key Mapping:**
 
-```bash
-export OIDC_ISSUER_URL=https://login.spot.rackspace.com/
-export OIDC_CLIENT_ID=YOUR_CLIENT_ID
-export OIDC_ORGANIZATION_ID=org_xxxxx
+| Config File (JSON) | CLI Argument | Environment Variable |
+|--------------------|--------------|---------------------|
+| `issuer` | `--issuer` | `OIDC_ISSUER_URL` |
+| `clientId` | `--client-id` | `OIDC_CLIENT_ID` |
+| `organizationId` | `--organization` | `OIDC_ORGANIZATION_ID` |
+| `backendUrl` | `--backend-url` | - |
+| `scopes` | `--scopes` | - |
+| `callbackPort` | `--port` | - |
 
-oidc-authenticator --daemon --backend-url https://backstage.example.com
-```
-
-### Option 3: CLI Arguments
-
-```bash
-oidc-authenticator \
-  --daemon \
-  --issuer https://login.spot.rackspace.com/ \
-  --client-id YOUR_CLIENT_ID \
-  --organization org_xxxxx \
-  --backend-url https://backstage.example.com \
-  --verbose
-```
-
-## Examples
-
-### Production: Daemon Mode
-
-```bash
-# 1. Start daemon (doesn't block)
-cd oidc-authenticator
-node bin/cli.js --daemon --verbose
-
-# Output:
-# ✅ OIDC authenticator daemon running on http://localhost:8000
-# 📤 Tokens will be sent to: https://backstage.example.com
-
-# 2. Terminal returns immediately - daemon runs in background
-# 3. User opens http://localhost:8000 when ready to login
-# 4. Daemon handles authentication and sends tokens to Backstage
-# 5. Daemon stays running for next authentication
-```
-
-### Testing: One-Time Mode
-
-```bash
-# Run authentication (blocks until complete)
-cd oidc-authenticator
-node bin/cli.js \
-  --issuer https://login.spot.rackspace.com/ \
-  --client-id YOUR_CLIENT_ID \
-  --backend-url https://your-backend.example.com \
-  --verbose
-
-# What happens:
-# 1. Browser opens automatically to OIDC provider
-# 2. You log in
-# 3. Terminal shows: ✅ Tokens obtained successfully!
-# 4. Script exits (tokens sent to backend)
-```
-
-### Debugging: Save Tokens to File
-
-```bash
-# One-time mode with file output
-node bin/cli.js \
-  --issuer https://login.spot.rackspace.com/ \
-  --client-id YOUR_CLIENT_ID \
-  --output /tmp/tokens.json \
-  --verbose
-
-# Tokens saved to /tmp/tokens.json instead of sent to backend
-```
-
-### Using Environment Variables
-
-```bash
-# Set once
-export OIDC_ISSUER_URL=https://login.spot.rackspace.com/
-export OIDC_CLIENT_ID=mwG3lUMV8KyeMqHe4fJ5Bb3nM1vBvRNa
-export OIDC_ORGANIZATION_ID=org_xxxxx
-
-# Then use without flags
-node bin/cli.js --daemon --backend-url https://your-backend.example.com --verbose
-```
-
-### Custom Port
-
-```bash
-# If port 8000 is in use
-node bin/cli.js --daemon --port 8080 --verbose
-
-# Update your frontend to check http://localhost:8080/health
-```
-
-## Token Format
-
-The daemon sends tokens to your backend in this format:
-
-```json
-{
-  "access_token": "eyJhbGci...",
-  "id_token": "eyJhbGci...",
-  "refresh_token": "v1.MRrt...",
-  "token_type": "Bearer",
-  "expires_in": 86400,
-  "scope": "openid profile email"
-}
-```
-
-## Security Considerations
-
-### 1. PKCE (Proof Key for Code Exchange)
-- Protects against authorization code interception
-- Uses SHA256 challenge method
-- Fresh challenge generated for each authentication session
-- No client secret needed
-
-### 2. State Parameter
-- Prevents CSRF attacks
-- Random state generated per session
-- Validated on callback
-
-### 3. Localhost Only
-- Server binds to `127.0.0.1`
-- Not accessible from network
-- OIDC provider must support `http://localhost:PORT` redirects
-
-### 4. No Token Storage
-- Tokens are never stored locally (unless `--output` used)
-- Immediately sent to Backstage backend
-- Kept in memory only during exchange process
-- Cleared after successful transmission
-
-### 5. Session Isolation
-- Each authentication gets fresh PKCE/state
-- Previous sessions don't interfere
-- State mismatch blocks replay attacks
+**Priority:** CLI arguments > Environment variables > `config.json`
 
 ## Troubleshooting
 
 ### Port Already in Use
 
-If port 8000 is already in use:
-
 ```bash
-# Use different port
-node bin/cli.js --daemon --port 8080 --verbose
+# Find and kill process
+lsof -ti :8000 | xargs kill -9
+
+# Or use different port
+node bin/cli.js start --port 8080
 ```
 
-Update your Backstage frontend to check `http://localhost:8080`.
-
-### Daemon Not Running
-
-From Backstage frontend, check health:
-
-```javascript
-fetch('http://localhost:8000/health')
-  .then(r => r.json())
-  .then(data => console.log(data))
-  .catch(() => console.log('Daemon not running'));
-```
-
-Or from command line:
+### Daemon Not Starting
 
 ```bash
+# Check for errors
+node bin/cli.js start --verbose
+
+# Verify config
+cat config.json
+
+# Test health endpoint
 curl http://localhost:8000/health
 ```
 
-Expected response:
-```json
-{"status":"running","issuer":"https://login.spot.rackspace.com/"}
+### Authentication Fails
+
+```bash
+# Run in verbose mode to see details
+node bin/cli.js --verbose
+
+# Check OIDC provider is accessible
+# Verify client ID and issuer URL
+# Review decoded JWT claims for issues
 ```
-
-### CORS Issues
-
-**Good news:** No CORS configuration needed!
-
-The daemon serves HTML pages directly - Backstage frontend only needs to:
-1. Check `/health` endpoint (same-origin request from browser)
-2. Open `/` in new window (navigation, not XHR - no CORS)
-
-### Browser Didn't Open (Legacy Mode)
-
-If using one-time auth mode and browser doesn't open automatically, the URL will be displayed in the terminal. Copy and paste it into your browser.
-
-### Callback URL Mismatch
-
-Ensure your OIDC provider has `http://localhost:8000` (or your custom port) in the allowed callback URLs list.
-
-**Note:** Use `localhost`, not `127.0.0.1` - most OIDC providers require the `localhost` hostname.
-
-### Token Exchange Failed
-
-Check that:
-1. Client ID is correct
-2. OIDC issuer URL is correct (should end with `/`)
-3. Network allows HTTPS connections to issuer
-4. Organization ID is correct (if multi-tenant)
 
 ## Development
 
-### Project Structure
-
-```
-oidc-authenticator/
-├── bin/
-│   └── cli.js              # CLI entry point
-├── lib/
-│   └── index.js            # Core OIDCAuthenticator class
-├── docs/                   # Documentation
-│   ├── README.md           # Documentation index
-│   ├── architecture/       # Design documents
-│   ├── guides/             # Installation & configuration
-│   ├── research/           # Investigation notes & POCs
-│   └── scripts/            # Helper scripts
-├── config.json             # Configuration (gitignored)
-├── config.example.json     # Configuration template
-├── test-device-flow.js     # Device flow test script
-├── test-oidc-login.js      # OIDC login test script (legacy)
-├── package.json
-└── README.md
-```
-
-### Testing Locally
-
-#### Quick Test
-
 ```bash
-# Terminal 1 - Start daemon
-cd oidc-authenticator
-node bin/cli.js --daemon --verbose
+# Install dependencies
+npm install
 
-# Terminal 2 - Check health
-curl http://localhost:8000/health
+# Run tests (if available)
+npm test
 
-# Browser - Test authentication
-open http://localhost:8000
+# Start in development mode
+node bin/cli.js start --verbose
 ```
 
-#### Test Scripts
+## Requirements
 
-The project includes test scripts for different authentication flows:
-
-```bash
-# Test device flow (investigation script)
-node test-device-flow.js
-
-# Test OIDC login flow (legacy one-shot mode)
-node test-oidc-login.js
-```
-
-**Note**: These test scripts were used during development to investigate different OIDC flows. The recommended production mode is daemon mode (see Quick Test above).
-
-### Mock Backend Server
-
-For testing without Backstage:
-
-```javascript
-// test-backend.js
-const http = require('http');
-
-http.createServer((req, res) => {
-  if (req.method === 'POST' && req.url === '/api/cluster-auth/tokens') {
-    let body = '';
-    req.on('data', chunk => body += chunk);
-    req.on('end', () => {
-      console.log('Received tokens:', JSON.parse(body));
-      res.writeHead(200);
-      res.end(JSON.stringify({ status: 'ok' }));
-    });
-  }
-}).listen(7007, () => {
-  console.log('Mock backend on http://localhost:7007');
-});
-```
-
-Then run daemon with:
-```bash
-node bin/cli.js --daemon --backend-url http://localhost:7007 --verbose
-```
-
-## Exit Codes
-
-- `0` - Success (tokens obtained and sent)
-- `1` - Error (authentication failed)
-- `2` - User cancelled (Ctrl+C)
-
-## Comparison with kubectl oidc-login
-
-| Feature | oidc-authenticator | kubectl oidc-login |
-|---------|-------------------|-------------------|
-| **Purpose** | Backstage/general | Kubernetes-specific |
-| **Mode** | Daemon + one-shot | One-shot only |
-| **Language** | Node.js | Go |
-| **Dependencies** | Node.js runtime | Standalone binary |
-| **Output** | JSON → backend | Updates kubeconfig |
-| **Browser-init** | ✅ Yes (daemon) | ❌ No |
-
-## Workflow Comparison
-
-### Traditional OAuth (Won't Work for Backstage on Private Network)
-
-```
-User → Backstage → OIDC Provider → Backstage (requires public URL)
-```
-
-### kubectl oidc-login Approach
-
-```
-User runs CLI → OIDC Provider → CLI → Update kubeconfig
-```
-
-### This Tool (Daemon Mode)
-
-```
-User runs daemon → User clicks button in Backstage →
-Open localhost:8000 → OIDC Provider → localhost:8000 →
-Send to Backstage backend
-```
+- Node.js 18+
+- OIDC/OAuth2 provider (Auth0, Okta, Keycloak, etc.)
+- OAuth application registered with provider
 
 ## License
 
 MIT
 
-## Links
+## Related
 
-- [GitHub Repository](https://github.com/open-service-portal/oidc-authenticator)
-- [Issues](https://github.com/open-service-portal/oidc-authenticator/issues)
-
-## Credits
-
-Inspired by [kubectl oidc-login](https://github.com/int128/kubelogin).
+- **Backstage Integration**: See `../docs/oidc-cluster-authentication.md`
+- **kubectl oidc-login**: Similar tool for Kubernetes authentication
