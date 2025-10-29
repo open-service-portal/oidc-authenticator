@@ -1,0 +1,43 @@
+# OIDC Authenticator Configuration Example
+# Copy this file to config.yaml and fill in your values
+
+# OIDC Provider Settings
+issuer: "https://your-oidc-provider.com/"
+clientId: "your-client-id"
+organizationId: "org_xxxxx"  # Optional: for Auth0 multi-tenant
+scopes: "openid profile email offline"
+
+# Port Configuration
+# daemon.port: Port for persistent daemon mode (default: 8000)
+# cli.port: Port for one-off CLI mode (default: 8001)
+# Using different ports prevents conflicts when running both modes
+daemon:
+  port: 8000
+cli:
+  port: 8001
+
+# Backend Integration (Optional - for legacy direct-send mode)
+# Modern approach: Use ?mode=return-tokens and let frontend send tokens
+# Legacy approach: Configure backend and daemon sends directly
+backend:
+  url: "http://localhost:7007"
+  endpoint: "/api/cluster-auth/tokens"  # Token submission endpoint
+  secret: "your-shared-secret-here"      # Auth secret (required if using backend URL)
+  # Generate a strong secret: openssl rand -hex 32
+  # Backend must verify this secret in X-Auth-Secret header
+
+# Token Bypass (Optional - skips OIDC flow if provided)
+# Provide both access_token and id_token from a previous OIDC flow
+# If both tokens are provided, OIDC flow is skipped entirely
+# If tokens are not provided (or commented out), normal OIDC flow is used
+# tokens:
+#   accessToken: "eyJhbGciO..."
+#   idToken: "eyJhbGci..."
+
+# NOTE: When tokens are provided:
+# - OIDC flow is completely skipped
+# - Tokens are sent directly to backend
+# - Daemon responds immediately without browser redirect
+# - Both tokens are from OIDC authentication, NOT Kubernetes service account tokens
+# - Access token is typically JWE encrypted, ID token is JWT
+# - You can get these tokens by running normal OIDC flow once with --verbose --output

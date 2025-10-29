@@ -76,20 +76,22 @@ function removePidFile() {
   }
 }
 
-// Load config from config.json
+// Load config from config.yaml
 function loadConfig() {
-  const configPath = path.join(__dirname, '..', 'config.json');
+  const yaml = require('js-yaml');
+  const configPath = path.join(__dirname, '..', 'config.yaml');
 
   if (fs.existsSync(configPath)) {
     try {
       const configData = fs.readFileSync(configPath, 'utf8');
-      return JSON.parse(configData);
+      return yaml.load(configData);
     } catch (error) {
-      console.error(`Warning: Failed to load config.json: ${error.message}`);
-      return {};
+      console.error(`Error: Failed to load config.yaml: ${error.message}`);
+      process.exit(1);
     }
   }
 
+  // No config file found
   return {};
 }
 
@@ -107,16 +109,38 @@ function parseArgs() {
     startIndex = 0; // Parse from the beginning
   }
 
+  // Support nested structure with backward compatibility
+  const daemon = fileConfig.daemon || {};
+  const cli = fileConfig.cli || {};
+  const callback = fileConfig.callback || {};  // Legacy support
+  const backend = fileConfig.backend || {};
+
+  // Determine default port based on mode
+  // Daemon mode (persistent) uses 8000, one-off mode uses 8001 to avoid conflicts
+  const isDaemonMode = command === 'start' || command === '_internal_daemon';
+  const defaultPort = isDaemonMode ? 8000 : 8001;
+
+  // Priority: daemon.port/cli.port > callback.port (legacy) > callbackPort (legacy) > defaultPort
+  let configPort;
+  if (isDaemonMode) {
+    configPort = daemon.port || callback.port || fileConfig.callbackPort;
+  } else {
+    configPort = cli.port || callback.port || fileConfig.callbackPort;
+  }
+
   const config = {
     command: command,
     issuer: fileConfig.issuer || null,
     clientId: fileConfig.clientId || null,
     organizationId: fileConfig.organizationId || null,
     scopes: fileConfig.scopes || 'openid profile email',
-    port: fileConfig.callbackPort || 8000,
+    port: configPort || defaultPort,
     output: null,
     verbose: false,
-    backendUrl: fileConfig.backendUrl || null,
+    backendUrl: backend.url || fileConfig.backendUrl || null,
+    backendEndpoint: backend.endpoint || '/api/cluster-auth/tokens',
+    backendSecret: backend.secret || null,  // Auth secret for backend
+    tokens: fileConfig.tokens || null,  // Token bypass configuration
   };
 
   // Parse options
@@ -162,9 +186,10 @@ function showHelp() {
 oidc-authenticator - Client-side OIDC authentication for Backstage
 
 Architecture:
-  This tool runs on your laptop and sends authentication tokens to your
-  Backstage server. Similar to kubectl oidc-login, it operates silently
-  by default and only shows output when using --verbose.
+  This tool runs on your laptop and handles OIDC authentication for Backstage.
+  It returns tokens to the frontend via postMessage (default) or optionally
+  sends them directly to the backend. Similar to kubectl oidc-login, it
+  operates silently by default and only shows output when using --verbose.
 
 Usage:
   oidc-authenticator [options]           # One-off authentication (opens browser)
@@ -180,20 +205,25 @@ Commands:
   status                  Check if daemon is running
 
 Options:
-  --issuer <url>          OIDC issuer URL (required unless in config.json)
-  --client-id <id>        OAuth client ID (required unless in config.json)
+  --issuer <url>          OIDC issuer URL (required unless in config.yaml)
+  --client-id <id>        OAuth client ID (required unless in config.yaml)
   --organization <id>     Organization ID (optional)
-  --backend-url <url>     Backend URL (required for normal operation)
+  --backend-url <url>     Backend URL (optional - for legacy direct-send mode)
   --scopes <scopes>       Space-separated scopes (default: "openid profile email")
-  --port <port>           Callback port (default: 8000)
+  --port <port>           Callback port (default: 8000 for daemon, 8001 for one-off)
   --output <file>         Save tokens to file (optional, for debugging)
   -v, --verbose           Show detailed output
   --help                  Show this help message
 
 Configuration File:
-  config.json             Place in the same directory as the CLI tool
-                          All options can be set in config.json to avoid
+  config.yaml             Place in the same directory as the CLI tool
+                          All options can be set in config.yaml to avoid
                           typing them every time. CLI args override config.
+
+Port Configuration:
+  daemon.port             Port for daemon mode (default: 8000)
+  cli.port                Port for one-off mode (default: 8001)
+                          Different ports prevent conflicts when testing both modes
 
 Environment Variables:
   OIDC_ISSUER_URL         OIDC issuer URL
@@ -222,23 +252,34 @@ Examples:
   # Stop daemon
   oidc-authenticator stop
 
-  # Using config.json (recommended)
-  cat > config.json <<EOF
-  {
-    "issuer": "https://login.spot.rackspace.com/",
-    "clientId": "YOUR_CLIENT_ID",
-    "organizationId": "org_xxxxx",
-    "backendUrl": "https://backstage.example.com"
-  }
+  # Using config.yaml (recommended)
+  cat > config.yaml <<EOF
+  issuer: "https://login.spot.rackspace.com/"
+  clientId: "YOUR_CLIENT_ID"
+  organizationId: "org_xxxxx"
+  backend:
+    url: "https://backstage.example.com"
+  daemon:
+    port: 8000
+  cli:
+    port: 8001
   EOF
-  oidc-authenticator              # One-off mode
-  oidc-authenticator start        # Or daemon mode
+  oidc-authenticator              # One-off mode (uses port 8001)
+  oidc-authenticator start        # Daemon mode (uses port 8000)
 
 Integration with Backstage:
   1. Run the daemon: oidc-authenticator start
-  2. In Backstage frontend, show login button that opens http://localhost:8000
-  3. Check if daemon is running: fetch('http://localhost:8000/health')
-  4. If not running, show message: "Please run 'oidc-authenticator start'"
+  2. In Backstage frontend, show login button that opens:
+     http://localhost:8000/?mode=return-tokens
+  3. Listen for postMessage event with type 'cluster-tokens':
+     window.addEventListener('message', (event) => {
+       if (event.data.type === 'cluster-tokens') {
+         const tokens = event.data.tokens;
+         // Send tokens to backend with authenticated session
+       }
+     });
+  4. Check if daemon is running: fetch('http://localhost:8000/health')
+  5. If not running, show message: "Please run 'oidc-authenticator start'"
 
 Exit Codes:
   0   Success
@@ -264,6 +305,8 @@ async function main() {
       console.log(`✅ Daemon is running (PID: ${status.pid})`);
       console.log(`📋 Health check: http://localhost:${config.port}/health`);
       console.log(`🔗 To authenticate, open: http://localhost:${config.port}/`);
+      const logFile = path.join(os.homedir(), '.oidc-authenticator.log');
+      console.log(`📝 Log file: ${logFile}`);
       process.exit(0);
     } else {
       console.log('⚠️  Daemon is not running');
@@ -299,15 +342,21 @@ async function main() {
       process.exit(1);
     }
 
-    // Validate required options
-    if (!config.issuer) {
-      console.error('Error: --issuer is required (or set OIDC_ISSUER_URL)');
-      process.exit(1);
-    }
+    // Validate required options (unless using token bypass mode)
+    const hasTokenBypass = config.tokens && config.tokens.accessToken && config.tokens.idToken;
 
-    if (!config.clientId) {
-      console.error('Error: --client-id is required (or set OIDC_CLIENT_ID)');
-      process.exit(1);
+    if (!hasTokenBypass) {
+      if (!config.issuer) {
+        console.error('Error: --issuer is required (or set OIDC_ISSUER_URL)');
+        console.error('Alternatively, configure tokens bypass in config.yaml');
+        process.exit(1);
+      }
+
+      if (!config.clientId) {
+        console.error('Error: --client-id is required (or set OIDC_CLIENT_ID)');
+        console.error('Alternatively, configure tokens bypass in config.yaml');
+        process.exit(1);
+      }
     }
 
     // Daemonize the process
@@ -317,20 +366,37 @@ async function main() {
 
     // Fork the process to run in background
     const { spawn } = require('child_process');
+
+    // Build arguments list
+    const daemonArgs = [__filename, '_internal_daemon'];
+
+    // Only pass issuer and clientId if they exist (token bypass mode might not need them)
+    if (config.issuer) {
+      daemonArgs.push('--issuer', config.issuer);
+    }
+    if (config.clientId) {
+      daemonArgs.push('--client-id', config.clientId);
+    }
+    if (config.organizationId) {
+      daemonArgs.push('--organization', config.organizationId);
+    }
+
+    daemonArgs.push('--scopes', config.scopes);
+    daemonArgs.push('--port', config.port.toString());
+
+    if (config.backendUrl) {
+      daemonArgs.push('--backend-url', config.backendUrl);
+    }
+    if (config.verbose) {
+      daemonArgs.push('--verbose');
+    }
+    if (config.output) {
+      daemonArgs.push('--output', config.output);
+    }
+
     const subprocess = spawn(
       process.argv[0], // node executable
-      [
-        __filename,
-        '_internal_daemon',
-        '--issuer', config.issuer,
-        '--client-id', config.clientId,
-        ...(config.organizationId ? ['--organization', config.organizationId] : []),
-        '--scopes', config.scopes,
-        '--port', config.port.toString(),
-        ...(config.backendUrl ? ['--backend-url', config.backendUrl] : []),
-        ...(config.verbose ? ['--verbose'] : []),
-        ...(config.output ? ['--output', config.output] : []),
-      ],
+      daemonArgs,
       {
         detached: true,
         stdio: config.verbose ? 'inherit' : 'ignore',
@@ -350,6 +416,9 @@ async function main() {
       if (config.backendUrl) {
         console.log(`📤 Tokens will be sent to: ${config.backendUrl}`);
       }
+      // Show log file location
+      const logFile = path.join(os.homedir(), '.oidc-authenticator.log');
+      console.log(`📝 Log file: ${logFile}`);
       process.exit(0);
     } else {
       console.error('❌ Failed to start daemon');
@@ -381,6 +450,9 @@ async function main() {
       callbackPort: config.port,
       verbose: config.verbose,
       backendUrl: config.backendUrl,
+      backendSecret: config.backendSecret,  // Auth secret for backend
+      tokens: config.tokens,  // Pass tokens bypass configuration
+      enableLogging: true,    // Enable logging for daemon mode
     });
 
     try {
@@ -397,17 +469,21 @@ async function main() {
   // One-off authentication mode (no command or unrecognized command)
   // This mode opens the browser automatically and completes authentication once
   if (!command || command.startsWith('--')) {
-    // Validate required options
-    if (!config.issuer) {
-      console.error('Error: --issuer is required (or set OIDC_ISSUER_URL)');
-      console.error('Use --help for usage information');
-      process.exit(1);
-    }
+    // Validate required options (unless using token bypass mode)
+    const hasTokenBypass = config.tokens && config.tokens.accessToken && config.tokens.idToken;
 
-    if (!config.clientId) {
-      console.error('Error: --client-id is required (or set OIDC_CLIENT_ID)');
-      console.error('Use --help for usage information');
-      process.exit(1);
+    if (!hasTokenBypass) {
+      if (!config.issuer) {
+        console.error('Error: --issuer is required (or set OIDC_ISSUER_URL)');
+        console.error('Use --help for usage information');
+        process.exit(1);
+      }
+
+      if (!config.clientId) {
+        console.error('Error: --client-id is required (or set OIDC_CLIENT_ID)');
+        console.error('Use --help for usage information');
+        process.exit(1);
+      }
     }
 
     const authenticator = new OIDCAuthenticator({
@@ -418,6 +494,9 @@ async function main() {
       callbackPort: config.port,
       verbose: config.verbose,
       backendUrl: config.backendUrl,
+      backendSecret: config.backendSecret,  // Auth secret for backend
+      tokens: config.tokens,  // Pass tokens bypass configuration
+      enableLogging: false,   // Disable logging for one-off mode
     });
 
     try {
@@ -432,8 +511,9 @@ async function main() {
             console.log(`✅ Tokens sent to backend: ${config.backendUrl}`);
           }
         } catch (error) {
-          console.error(`⚠️  Failed to send tokens to backend: ${error.message}`);
-          console.error('   Continuing anyway...');
+          if (config.verbose) {
+            console.log(`⚠️  Could not send tokens to backend: ${error.message}`);
+          }
         }
       }
 

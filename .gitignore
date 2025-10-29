@@ -5,4 +5,6 @@ node_modules/
 tokens.json
 *.swp
 *.swo
-config.json
+
+# Config file contains credentials - DO NOT COMMIT!
+config.yaml
