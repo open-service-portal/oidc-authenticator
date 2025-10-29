@@ -22,8 +22,9 @@
   "engines": {
     "node": ">=18.0.0"
   },
-  "dependencies": {},
-  "devDependencies": {},
+  "dependencies": {
+    "js-yaml": "^4.1.0"
+  },
   "repository": {
     "type": "git",
     "url": "https://github.com/open-service-portal/oidc-authenticator.git"

@@ -76,20 +76,22 @@ function removePidFile() {
   }
 }
 
-// Load config from config.json
+// Load config from config.yaml
 function loadConfig() {
-  const configPath = path.join(__dirname, '..', 'config.json');
+  const yaml = require('js-yaml');
+  const configPath = path.join(__dirname, '..', 'config.yaml');
 
   if (fs.existsSync(configPath)) {
     try {
       const configData = fs.readFileSync(configPath, 'utf8');
-      return JSON.parse(configData);
+      return yaml.load(configData);
     } catch (error) {
-      console.error(`Warning: Failed to load config.json: ${error.message}`);
-      return {};
+      console.error(`Error: Failed to load config.yaml: ${error.message}`);
+      process.exit(1);
     }
   }
 
+  // No config file found
   return {};
 }
 
@@ -107,16 +109,22 @@ function parseArgs() {
     startIndex = 0; // Parse from the beginning
   }
 
+  // Support nested structure with backward compatibility
+  const callback = fileConfig.callback || {};
+  const backend = fileConfig.backend || {};
+
   const config = {
     command: command,
     issuer: fileConfig.issuer || null,
     clientId: fileConfig.clientId || null,
     organizationId: fileConfig.organizationId || null,
     scopes: fileConfig.scopes || 'openid profile email',
-    port: fileConfig.callbackPort || 8000,
+    port: callback.port || fileConfig.callbackPort || 8000,
     output: null,
     verbose: false,
-    backendUrl: fileConfig.backendUrl || null,
+    backendUrl: backend.url || fileConfig.backendUrl || null,
+    backendEndpoint: backend.endpoint || '/api/cluster-auth/tokens',
+    tokens: fileConfig.tokens || null,  // Token bypass configuration
   };
 
   // Parse options
@@ -264,6 +272,8 @@ async function main() {
       console.log(`✅ Daemon is running (PID: ${status.pid})`);
       console.log(`📋 Health check: http://localhost:${config.port}/health`);
       console.log(`🔗 To authenticate, open: http://localhost:${config.port}/`);
+      const logFile = path.join(os.homedir(), '.oidc-authenticator.log');
+      console.log(`📝 Log file: ${logFile}`);
       process.exit(0);
     } else {
       console.log('⚠️  Daemon is not running');
@@ -299,15 +309,21 @@ async function main() {
       process.exit(1);
     }
 
-    // Validate required options
-    if (!config.issuer) {
-      console.error('Error: --issuer is required (or set OIDC_ISSUER_URL)');
-      process.exit(1);
-    }
+    // Validate required options (unless using token bypass mode)
+    const hasTokenBypass = config.tokens && config.tokens.accessToken && config.tokens.idToken;
 
-    if (!config.clientId) {
-      console.error('Error: --client-id is required (or set OIDC_CLIENT_ID)');
-      process.exit(1);
+    if (!hasTokenBypass) {
+      if (!config.issuer) {
+        console.error('Error: --issuer is required (or set OIDC_ISSUER_URL)');
+        console.error('Alternatively, configure tokens bypass in config.yaml');
+        process.exit(1);
+      }
+
+      if (!config.clientId) {
+        console.error('Error: --client-id is required (or set OIDC_CLIENT_ID)');
+        console.error('Alternatively, configure tokens bypass in config.yaml');
+        process.exit(1);
+      }
     }
 
     // Daemonize the process
@@ -317,20 +333,37 @@ async function main() {
 
     // Fork the process to run in background
     const { spawn } = require('child_process');
+
+    // Build arguments list
+    const daemonArgs = [__filename, '_internal_daemon'];
+
+    // Only pass issuer and clientId if they exist (token bypass mode might not need them)
+    if (config.issuer) {
+      daemonArgs.push('--issuer', config.issuer);
+    }
+    if (config.clientId) {
+      daemonArgs.push('--client-id', config.clientId);
+    }
+    if (config.organizationId) {
+      daemonArgs.push('--organization', config.organizationId);
+    }
+
+    daemonArgs.push('--scopes', config.scopes);
+    daemonArgs.push('--port', config.port.toString());
+
+    if (config.backendUrl) {
+      daemonArgs.push('--backend-url', config.backendUrl);
+    }
+    if (config.verbose) {
+      daemonArgs.push('--verbose');
+    }
+    if (config.output) {
+      daemonArgs.push('--output', config.output);
+    }
+
     const subprocess = spawn(
       process.argv[0], // node executable
-      [
-        __filename,
-        '_internal_daemon',
-        '--issuer', config.issuer,
-        '--client-id', config.clientId,
-        ...(config.organizationId ? ['--organization', config.organizationId] : []),
-        '--scopes', config.scopes,
-        '--port', config.port.toString(),
-        ...(config.backendUrl ? ['--backend-url', config.backendUrl] : []),
-        ...(config.verbose ? ['--verbose'] : []),
-        ...(config.output ? ['--output', config.output] : []),
-      ],
+      daemonArgs,
       {
         detached: true,
         stdio: config.verbose ? 'inherit' : 'ignore',
@@ -350,6 +383,9 @@ async function main() {
       if (config.backendUrl) {
         console.log(`📤 Tokens will be sent to: ${config.backendUrl}`);
       }
+      // Show log file location
+      const logFile = path.join(os.homedir(), '.oidc-authenticator.log');
+      console.log(`📝 Log file: ${logFile}`);
       process.exit(0);
     } else {
       console.error('❌ Failed to start daemon');
@@ -381,6 +417,8 @@ async function main() {
       callbackPort: config.port,
       verbose: config.verbose,
       backendUrl: config.backendUrl,
+      tokens: config.tokens,  // Pass tokens bypass configuration
+      enableLogging: true,    // Enable logging for daemon mode
     });
 
     try {
@@ -397,17 +435,21 @@ async function main() {
   // One-off authentication mode (no command or unrecognized command)
   // This mode opens the browser automatically and completes authentication once
   if (!command || command.startsWith('--')) {
-    // Validate required options
-    if (!config.issuer) {
-      console.error('Error: --issuer is required (or set OIDC_ISSUER_URL)');
-      console.error('Use --help for usage information');
-      process.exit(1);
-    }
+    // Validate required options (unless using token bypass mode)
+    const hasTokenBypass = config.tokens && config.tokens.accessToken && config.tokens.idToken;
 
-    if (!config.clientId) {
-      console.error('Error: --client-id is required (or set OIDC_CLIENT_ID)');
-      console.error('Use --help for usage information');
-      process.exit(1);
+    if (!hasTokenBypass) {
+      if (!config.issuer) {
+        console.error('Error: --issuer is required (or set OIDC_ISSUER_URL)');
+        console.error('Use --help for usage information');
+        process.exit(1);
+      }
+
+      if (!config.clientId) {
+        console.error('Error: --client-id is required (or set OIDC_CLIENT_ID)');
+        console.error('Use --help for usage information');
+        process.exit(1);
+      }
     }
 
     const authenticator = new OIDCAuthenticator({
@@ -418,6 +460,8 @@ async function main() {
       callbackPort: config.port,
       verbose: config.verbose,
       backendUrl: config.backendUrl,
+      tokens: config.tokens,  // Pass tokens bypass configuration
+      enableLogging: false,   // Disable logging for one-off mode
     });
 
     try {
@@ -432,8 +476,9 @@ async function main() {
             console.log(`✅ Tokens sent to backend: ${config.backendUrl}`);
           }
         } catch (error) {
-          console.error(`⚠️  Failed to send tokens to backend: ${error.message}`);
-          console.error('   Continuing anyway...');
+          if (config.verbose) {
+            console.log(`⚠️  Could not send tokens to backend: ${error.message}`);
+          }
         }
       }
 

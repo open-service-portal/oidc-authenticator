@@ -17,15 +17,16 @@ Perfect for Backstage, Kubernetes clusters, and custom applications.
 
 ### 1. Configure
 
-Create `config.json`:
+Create `config.yaml`:
 
-```json
-{
-  "issuer": "https://login.spot.rackspace.com/",
-  "clientId": "YOUR_CLIENT_ID",
-  "organizationId": "org_xxxxx",
-  "backendUrl": "http://localhost:7007"
-}
+```yaml
+# OIDC Provider Settings
+issuer: "https://login.spot.rackspace.com/"
+clientId: "YOUR_CLIENT_ID"
+organizationId: "org_xxxxx"  # Optional
+
+# Backend URL
+backendUrl: "http://localhost:7007"
 ```
 
 Or use environment variables:
@@ -91,6 +92,20 @@ node bin/cli.js --help             # Show help
 
 ## Features
 
+### Token Bypass Mode ⭐ NEW
+
+Skip OIDC flow entirely with an existing OIDC access token:
+
+```yaml
+# config.yaml
+backendUrl: "http://localhost:7007"
+
+# Provide your OIDC access token directly
+token: "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIi..."
+```
+
+Perfect for development, testing, and CI/CD. See **[Token Bypass Documentation](./docs/token-bypass.md)**.
+
 ### Daemon Mode
 
 Long-running background process for persistent authentication:
@@ -103,6 +118,12 @@ node bin/cli.js start --verbose
 fetch('http://localhost:8000/health')  # Check if running
 window.open('http://localhost:8000')   # Trigger authentication
 ```
+
+**Logging:**
+- Daemon mode automatically logs to `~/.oidc-authenticator.log`
+- All HTTP requests and authentication flows are logged
+- Check log location: `node bin/cli.js status`
+- View logs: `tail -f ~/.oidc-authenticator.log`
 
 ### One-Off Mode
 
@@ -262,23 +283,28 @@ POST /api/cluster-auth/tokens    - Receive tokens from daemon
 
 ## Configuration File
 
-All options can be set in `config.json`:
+All options are set in `config.yaml`:
 
-```json
-{
-  "issuer": "https://login.spot.rackspace.com/",
-  "clientId": "YOUR_CLIENT_ID",
-  "organizationId": "org_xxxxx",
-  "backendUrl": "http://localhost:7007",
-  "scopes": "openid profile email",
-  "callbackPort": 8000
-}
+```yaml
+# OIDC Provider Settings
+issuer: "https://login.spot.rackspace.com/"
+clientId: "YOUR_CLIENT_ID"
+organizationId: "org_xxxxx"  # Optional
+
+# Backend URL
+backendUrl: "http://localhost:7007"
+
+# OAuth Scopes
+scopes: "openid profile email"
+
+# Callback Port
+callbackPort: 8000
 ```
 
 **Config Key Mapping:**
 
-| Config File (JSON) | CLI Argument | Environment Variable |
-|--------------------|--------------|---------------------|
+| Config File | CLI Argument | Environment Variable |
+|-------------|--------------|---------------------|
 | `issuer` | `--issuer` | `OIDC_ISSUER_URL` |
 | `clientId` | `--client-id` | `OIDC_CLIENT_ID` |
 | `organizationId` | `--organization` | `OIDC_ORGANIZATION_ID` |
@@ -286,7 +312,7 @@ All options can be set in `config.json`:
 | `scopes` | `--scopes` | - |
 | `callbackPort` | `--port` | - |
 
-**Priority:** CLI arguments > Environment variables > `config.json`
+**Priority:** CLI arguments > Environment variables > `config.yaml`
 
 ## Troubleshooting
 
@@ -343,11 +369,18 @@ node bin/cli.js start --verbose
 - OIDC/OAuth2 provider (Auth0, Okta, Keycloak, etc.)
 - OAuth application registered with provider
 
+## Documentation
+
+- **[Token Bypass Mode](./docs/token-bypass.md)** - Skip OIDC flow with pre-existing tokens (development/CI)
+- **[Backstage Integration](./docs/backstage-integration.md)** - Complete implementation guide with secure session token flow
+- **[Product Concept](./docs/product-concept.md)** - Vision for oidc-authenticator as a universal OAuth proxy
+- **[OIDC Kubernetes Authentication](../concepts/2025-10-23-oidc-kubernetes-authentication.md)** - Original architecture concept
+
 ## License
 
 MIT
 
 ## Related
 
-- **Backstage Integration**: See `../docs/oidc-cluster-authentication.md`
 - **kubectl oidc-login**: Similar tool for Kubernetes authentication
+- **oauth2-proxy**: Reverse proxy for OAuth2 authentication
