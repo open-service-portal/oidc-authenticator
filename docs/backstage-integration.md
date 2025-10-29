@@ -1,24 +1,29 @@
-# OIDC Authenticator: Secure Session Token Flow
+# OIDC Authenticator: Frontend Token Handover Flow
 
-## Implementation Complete! ✅
+## Current Implementation ✅
 
 Date: 2025-10-29
 Status: **Implemented and Ready for Testing**
 
 ## Overview
 
-The **OIDC Authenticator** now implements a fully secure session token flow where:
+The **OIDC Authenticator** implements a secure frontend token handover flow where:
 
 1. User clicks "K8s Cluster" sign-in on Backstage
-2. Popup opens to oidc-authenticator daemon (localhost:8000)
+2. Popup opens to oidc-authenticator daemon: `localhost:8000/?mode=return-tokens`
 3. User authenticates with OIDC provider (Auth0)
 4. Daemon receives OIDC tokens (access_token, id_token, refresh_token)
-5. Daemon sends tokens to Backstage backend
-6. **Backend validates JWT and issues Backstage session token** ✅
-7. **Backend returns session token to daemon** ✅
-8. **Daemon sends session token to frontend via postMessage** ✅
-9. **Frontend receives and stores session token** ✅
-10. User is now logged into Backstage with full session!
+5. **Daemon sends tokens to frontend via postMessage** ✅
+6. **Frontend receives tokens and sends to backend with authenticated session** ✅
+7. **Backend validates JWT and creates/updates session** ✅
+8. User is now logged into Backstage with full session!
+
+## Key Benefits
+
+✅ **No backend URL required in daemon** - daemon runs standalone
+✅ **Frontend controls token flow** - better security and flexibility
+✅ **Works with existing auth** - integrates with Backstage session management
+✅ **Secure postMessage** - tokens only sent to window.opener
 
 ## Security Model
 
@@ -28,7 +33,7 @@ The **OIDC Authenticator** now implements a fully secure session token flow wher
 ┌──────────────────────────────────────────────────────────────────┐
 │ WHO IS AUTHENTICATED?                                             │
 ├──────────────────────────────────────────────────────────────────┤
-│ 1. User authenticates with Auth0 in their browser               │
+│ 1. User authenticates with Auth0 in popup (localhost:8000)      │
 │ 2. Auth0 issues JWT id_token containing:                        │
 │    {                                                              │
 │      "email": "felix@example.com",                              │
@@ -37,41 +42,37 @@ The **OIDC Authenticator** now implements a fully secure session token flow wher
 │      "exp": 1761552502                                          │
 │    }                                                              │
 │ 3. JWT is cryptographically signed by Auth0                     │
-│ 4. Backend validates signature and extracts email               │
-│ 5. Backend creates user entity: user:default/felix              │
-│ 6. Backend issues Backstage session token for THIS user         │
-│ 7. Session token contains:                                       │
-│    {                                                              │
-│      "sub": "user:default/felix",                               │
-│      "ent": ["user:default/felix"],                             │
-│      "exp": <expiration>                                         │
-│    }                                                              │
-│ 8. Frontend stores session token                                 │
-│ 9. All subsequent requests use this session token               │
+│ 4. Daemon sends tokens to frontend via postMessage              │
+│ 5. Frontend (with existing Backstage session) sends to backend  │
+│ 6. Backend validates JWT signature and extracts email           │
+│ 7. Backend creates/updates user entity: user:default/felix      │
+│ 8. Backend updates session with cluster credentials             │
+│ 9. All subsequent K8s requests use cluster credentials          │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
 ### Security Properties
 
 ✅ **Identity is cryptographically verified** (JWT signature from Auth0)
-✅ **Session tokens are scoped to specific users** (sub claim)
-✅ **postMessage is origin-restricted** (only localhost:8000)
-✅ **No race conditions** (session token tied to authenticated user)
-✅ **Tokens expire** (both OIDC and Backstage tokens have expiration)
+✅ **Frontend controls token flow** (only authenticated users can send tokens)
+✅ **postMessage only to window.opener** (popup can only send to parent)
+✅ **Backend validates JWT** (verifies signature and claims)
+✅ **Tokens expire** (OIDC tokens have expiration)
 ✅ **Can't impersonate other users** (identity from signed JWT)
+✅ **No backend URL needed in daemon** (daemon is truly standalone)
 
 ## Complete Flow Diagram
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│ SECURE OIDC-AUTHENTICATOR FLOW                                          │
+│ FRONTEND TOKEN HANDOVER FLOW                                            │
 ├─────────────────────────────────────────────────────────────────────────┤
 │                                                                          │
-│ 1. User (Felix) opens Backstage → Not logged in                        │
+│ 1. User (Felix) opens Backstage → Already logged in with GitHub        │
 │                                                                          │
-│ 2. Clicks "K8s Cluster" on sign-in page                                │
+│ 2. Clicks "Add K8s Cluster" button                                     │
 │    ↓                                                                     │
-│ 3. Frontend opens popup → http://localhost:8000                         │
+│ 3. Frontend opens popup → http://localhost:8000/?mode=return-tokens    │
 │    ↓                                                                     │
 │ 4. oidc-authenticator daemon receives request                          │
 │    ↓                                                                     │
@@ -100,27 +101,33 @@ The **OIDC Authenticator** now implements a fully secure session token flow wher
 │      access_token: "eyJ...",                                            │
 │      id_token: "eyJ..." (JWT with email: felix@example.com),          │
 │      refresh_token: "v1.MRr...",                                        │
-│      expires_in: 3600                                                   │
+│      expires_in: 3600 (optional - not always present)                  │
 │    }                                                                     │
 │    ↓                                                                     │
-│ 10. Daemon POSTs tokens to Backstage backend:                          │
-│     POST http://localhost:7007/api/cluster-auth/tokens                 │
-│     {                                                                    │
-│       access_token: "eyJ...",                                           │
-│       id_token: "eyJ...",                                               │
-│       refresh_token: "v1.MRr...",                                       │
-│       token_type: "Bearer",                                             │
-│       expires_in: 3600                                                  │
-│     }                                                                    │
+│ 10. Daemon sends tokens to frontend via postMessage:                   │
+│     window.opener.postMessage({                                         │
+│       type: 'cluster-tokens',                                           │
+│       tokens: {                                                          │
+│         access_token: "eyJ...",                                         │
+│         id_token: "eyJ...",                                             │
+│         refresh_token: "v1.MRr...",                                     │
+│         token_type: "Bearer"                                            │
+│       }                                                                  │
+│     }, '*')                                                              │
+│     Note: expires_in NOT sent - backend decodes from JWT exp claim     │
 │     ↓                                                                    │
-│ 11. Backend validates id_token:                                         │
+│ 11. Frontend receives tokens and POSTs to backend:                     │
+│     POST /api/cluster-auth/tokens                                       │
+│     Headers: { Cookie: "backstage-session=..." }  // Authenticated!    │
+│     Body: { access_token, id_token, refresh_token, token_type }        │
+│     ↓                                                                    │
+│ 12. Backend validates id_token:                                         │
 │     - Verifies JWT signature (Auth0 public key)                        │
 │     - Checks expiration                                                 │
 │     - Extracts email: felix@example.com                                │
 │     - Creates userEntityRef: user:default/felix                        │
 │     ↓                                                                    │
-│ 12. Backend stores cluster tokens in database:                         │
-│     Table: cluster_tokens                                               │
+│ 13. Backend stores cluster tokens in session/database:                 │
 │     {                                                                    │
 │       user: "user:default/felix",                                      │
 │       access_token: "eyJ...",                                           │
@@ -129,45 +136,13 @@ The **OIDC Authenticator** now implements a fully secure session token flow wher
 │       expires_at: "2025-10-29T15:00:00Z"                              │
 │     }                                                                    │
 │     ↓                                                                    │
-│ 13. Backend issues Backstage session token:                            │
-│     httpAuth.issueUserToken({                                          │
-│       claims: {                                                         │
-│         sub: "user:default/felix",                                     │
-│         ent: ["user:default/felix"]                                    │
-│       }                                                                  │
-│     })                                                                   │
-│     → Returns: "eyJhbGc...Backstage-JWT-token"                        │
 │     ↓                                                                    │
-│ 14. Backend responds to daemon:                                         │
-│     {                                                                    │
-│       status: "ok",                                                     │
-│       user: "user:default/felix",                                      │
-│       backstageToken: "eyJhbGc...Backstage-JWT"                        │
-│     }                                                                    │
+│ 15. Popup closes automatically                                          │
 │     ↓                                                                    │
-│ 15. Daemon displays success page with postMessage:                     │
-│     <script>                                                            │
-│       if (window.opener) {                                             │
-│         window.opener.postMessage({                                    │
-│           type: 'backstage-auth-complete',                             │
-│           backstageToken: "eyJhbGc...",                                │
-│           success: true                                                 │
-│         }, '*');                                                        │
-│       }                                                                  │
-│       setTimeout(() => window.close(), 3000);                          │
-│     </script>                                                           │
-│     ↓                                                                    │
-│ 16. Frontend receives postMessage:                                      │
-│     - Verifies origin === 'http://localhost:8000'                      │
-│     - Extracts backstageToken                                           │
-│     - Stores in sessionToken property                                   │
-│     - Closes popup                                                       │
-│     - Resolves signIn() promise                                         │
-│     ↓                                                                    │
-│ 17. Backstage frontend now has session!                                │
-│     - All API calls include: Authorization: Bearer <backstageToken>    │
-│     - User is logged in as: user:default/felix                         │
-│     - Can access catalog, templates, etc.                              │
+│ 16. User can now access K8s clusters from Backstage!                   │
+│     - Cluster credentials stored in backend                            │
+│     - All K8s API requests use these credentials                       │
+│     - User remains logged in to Backstage with existing session        │
 │     ↓                                                                    │
 │ 18. User accesses Kubernetes resources:                                │
 │     - Frontend calls: GET /api/cluster-auth/token                      │
@@ -309,6 +284,86 @@ localStorage.getItem('backstage-session')
 ✅ Tokens sent to Backstage backend
 ✅ Received Backstage session token
 ```
+
+## Backend Authentication (Legacy Direct-Send Mode)
+
+If you're using the legacy direct-send mode where the daemon sends tokens directly to the backend (not recommended), you **MUST** implement authentication to prevent unauthorized access.
+
+### Security Risk
+
+Without authentication, anyone on localhost could send arbitrary tokens to your backend:
+
+```bash
+# Attacker could send fake tokens!
+curl -X POST http://localhost:7007/api/cluster-auth/tokens \
+  -H "Content-Type: application/json" \
+  -d '{"access_token": "fake", "id_token": "fake"}'
+```
+
+### Solution: Shared Secret
+
+Configure a shared secret that both daemon and backend know:
+
+**1. Generate a secret:**
+```bash
+openssl rand -hex 32
+# Output: a1b2c3d4e5f6...
+```
+
+**2. Configure daemon (`config.yaml`):**
+```yaml
+backend:
+  url: "http://localhost:7007"
+  secret: "a1b2c3d4e5f6..."  # The secret from step 1
+```
+
+**3. Configure backend (environment variable):**
+```bash
+export OIDC_AUTH_SECRET="a1b2c3d4e5f6..."  # Same secret
+```
+
+**4. Verify in backend:**
+```typescript
+// packages/backend/src/plugins/cluster-auth.ts
+router.post('/tokens', async (req, res) => {
+  // Verify auth secret
+  const authSecret = req.headers['x-auth-secret'];
+  const expectedSecret = process.env.OIDC_AUTH_SECRET;
+
+  if (!authSecret || authSecret !== expectedSecret) {
+    return res.status(401).json({
+      error: 'Unauthorized',
+      message: 'Invalid or missing X-Auth-Secret header'
+    });
+  }
+
+  // Process tokens...
+});
+```
+
+### Recommended: Use Frontend Handover Instead
+
+The modern approach doesn't require backend authentication because the frontend (with existing Backstage session) sends the tokens:
+
+```javascript
+// Frontend receives tokens from daemon
+window.addEventListener('message', async (event) => {
+  if (event.data.type === 'cluster-tokens') {
+    // Send to backend with authenticated session
+    await fetch('/api/cluster-auth/tokens', {
+      method: 'POST',
+      credentials: 'include',  // Sends Backstage session cookie
+      body: JSON.stringify(event.data.tokens)
+    });
+  }
+});
+```
+
+This is more secure because:
+- ✅ Only authenticated Backstage users can send tokens
+- ✅ No shared secret needed
+- ✅ Backend verifies Backstage session naturally
+- ✅ Works with Backstage's existing auth system
 
 ## Architecture Benefits
 

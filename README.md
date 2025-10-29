@@ -8,7 +8,7 @@ OIDC Authenticator runs on your laptop and handles OIDC/OAuth authentication flo
 
 - Runs as a daemon on `localhost:8000`
 - Handles PKCE OAuth flow client-side
-- Sends authentication tokens to your backend
+- Returns tokens to frontend via `postMessage` (default) or optionally sends directly to backend
 - Works on private networks (no public URL needed)
 
 Perfect for Backstage, Kubernetes clusters, and custom applications.
@@ -20,13 +20,17 @@ Perfect for Backstage, Kubernetes clusters, and custom applications.
 Create `config.yaml`:
 
 ```yaml
-# OIDC Provider Settings
+# OIDC Provider Settings (required)
 issuer: "https://login.spot.rackspace.com/"
 clientId: "YOUR_CLIENT_ID"
 organizationId: "org_xxxxx"  # Optional
 
-# Backend URL
-backendUrl: "http://localhost:7007"
+# Backend URL (optional - only needed for legacy direct-send mode)
+backend:
+  url: "http://localhost:7007"
+  secret: "your-shared-secret-here"  # Required if using backend URL
+  # Generate: openssl rand -hex 32
+  # Backend must verify this in X-Auth-Secret header
 ```
 
 Or use environment variables:
@@ -57,12 +61,18 @@ node bin/cli.js stop
 
 ### 3. Authenticate
 
-**Option A: From Browser/UI**
+**Option A: From Browser/UI (Recommended - Frontend handover)**
+- Open http://localhost:8000/?mode=return-tokens
+- Complete authentication
+- Tokens sent to frontend via `postMessage` to `window.opener`
+- Frontend sends tokens to backend with authenticated session
+
+**Option B: Legacy Direct-Send Mode (requires backend URL)**
 - Open http://localhost:8000
 - Complete authentication
-- Tokens sent to backend automatically
+- Tokens sent directly to backend
 
-**Option B: One-Off CLI**
+**Option C: One-Off CLI**
 ```bash
 node bin/cli.js --verbose
 ```
@@ -83,9 +93,9 @@ node bin/cli.js --help             # Show help
 --issuer <url>          OIDC issuer URL (required)
 --client-id <id>        OAuth client ID (required)
 --organization <id>     Organization ID (optional, for Auth0)
---backend-url <url>     Backend URL to send tokens to
+--backend-url <url>     Backend URL (optional - for legacy direct-send mode)
 --scopes <scopes>       OAuth scopes (default: "openid profile email")
---port <port>           Callback port (default: 8000)
+--port <port>           Callback port (default: 8000 for daemon, 8001 for one-off)
 --output <file>         Save tokens to file (debugging)
 -v, --verbose           Show detailed output
 ```
@@ -111,17 +121,93 @@ Perfect for development, testing, and CI/CD. See **[Token Bypass Documentation](
 Long-running background process for persistent authentication:
 
 ```bash
-# Start daemon
+# Start daemon (no backend URL needed for frontend handover)
 node bin/cli.js start --verbose
+```
 
-# Use from application
-fetch('http://localhost:8000/health')  # Check if running
-window.open('http://localhost:8000')   # Trigger authentication
+**Frontend Integration (Recommended):**
+
+```javascript
+// In your Backstage frontend or web app
+
+// 1. Check if daemon is running
+const checkDaemon = async () => {
+  try {
+    const response = await fetch('http://localhost:8000/health');
+    return response.ok;
+  } catch {
+    return false;
+  }
+};
+
+// 2. Open authentication popup with mode=return-tokens
+const authenticate = () => {
+  const authWindow = window.open(
+    'http://localhost:8000/?mode=return-tokens',
+    'OIDC Authentication',
+    'width=500,height=600'
+  );
+
+  // 3. Listen for tokens from daemon
+  window.addEventListener('message', async (event) => {
+    if (event.data.type === 'cluster-tokens') {
+      const tokens = event.data.tokens;
+
+      // 4. Send tokens to YOUR backend with authenticated session
+      await fetch('/api/cluster-auth/tokens', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include', // Include cookies for session auth
+        body: JSON.stringify(tokens)
+      });
+
+      authWindow.close();
+    }
+  });
+};
+```
+
+**Benefits:**
+- ✅ No backend URL needed in daemon config
+- ✅ Frontend controls when/how tokens are sent
+- ✅ Works with authenticated Backstage sessions
+- ✅ Better security - tokens only sent by authenticated users
+
+**Legacy Direct-Send Mode:**
+
+If you configure `backend.url` in config.yaml, you can also use:
+
+```yaml
+backend:
+  url: "http://localhost:7007"
+  secret: "your-shared-secret-here"  # REQUIRED for security!
+```
+
+```javascript
+window.open('http://localhost:8000')  # Sends directly to backend
+```
+
+**⚠️ Security Note:** If using legacy direct-send mode, you MUST configure `backend.secret` and verify it on the backend. The daemon will send this in the `X-Auth-Secret` header. Without this, anyone on localhost could send arbitrary tokens to your backend.
+
+**Backend Implementation:**
+```javascript
+// In your backend endpoint
+app.post('/api/cluster-auth/tokens', (req, res) => {
+  const authSecret = req.headers['x-auth-secret'];
+  const expectedSecret = process.env.OIDC_AUTH_SECRET;
+
+  if (!authSecret || authSecret !== expectedSecret) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  // Process tokens...
+});
 ```
 
 **Logging:**
 - Daemon mode automatically logs to `~/.oidc-authenticator.log`
-- All HTTP requests and authentication flows are logged
+- Startup info printed to stdout
+- All HTTP requests and authentication flows logged to file only
 - Check log location: `node bin/cli.js status`
 - View logs: `tail -f ~/.oidc-authenticator.log`
 
@@ -276,10 +362,11 @@ POST /api/cluster-auth/tokens    - Receive tokens from daemon
   "id_token": "eyJ...",
   "refresh_token": "v1.MRr...",
   "token_type": "Bearer",
-  "expires_in": 3600,
   "scope": "openid profile email"
 }
 ```
+
+**Note:** The `expires_in` field is not included in the payload as it's inconsistent across OIDC providers. The backend should decode token expiration directly from the JWT claims (`exp` field).
 
 ## Configuration File
 
@@ -292,27 +379,39 @@ clientId: "YOUR_CLIENT_ID"
 organizationId: "org_xxxxx"  # Optional
 
 # Backend URL
-backendUrl: "http://localhost:7007"
+backend:
+  url: "http://localhost:7007"
+  endpoint: "/api/cluster-auth/tokens"
 
 # OAuth Scopes
 scopes: "openid profile email"
 
-# Callback Port
-callbackPort: 8000
+# Port Configuration
+# daemon.port: Port for persistent daemon mode (default: 8000)
+# cli.port: Port for one-off CLI mode (default: 8001)
+daemon:
+  port: 8000
+cli:
+  port: 8001
 ```
 
 **Config Key Mapping:**
 
-| Config File | CLI Argument | Environment Variable |
-|-------------|--------------|---------------------|
-| `issuer` | `--issuer` | `OIDC_ISSUER_URL` |
-| `clientId` | `--client-id` | `OIDC_CLIENT_ID` |
-| `organizationId` | `--organization` | `OIDC_ORGANIZATION_ID` |
-| `backendUrl` | `--backend-url` | - |
-| `scopes` | `--scopes` | - |
-| `callbackPort` | `--port` | - |
+| Config File | CLI Argument | Environment Variable | Notes |
+|-------------|--------------|---------------------|-------|
+| `issuer` | `--issuer` | `OIDC_ISSUER_URL` | |
+| `clientId` | `--client-id` | `OIDC_CLIENT_ID` | |
+| `organizationId` | `--organization` | `OIDC_ORGANIZATION_ID` | |
+| `backend.url` | `--backend-url` | - | |
+| `scopes` | `--scopes` | - | |
+| `daemon.port` | `--port` | - | Daemon mode default: 8000 |
+| `cli.port` | `--port` | - | One-off mode default: 8001 |
 
-**Priority:** CLI arguments > Environment variables > `config.yaml`
+**Priority:** CLI arguments > Environment variables > `config.yaml` > built-in defaults
+
+**Port Defaults:**
+- **Daemon mode**: 8000 (persistent service for Backstage integration)
+- **One-off mode**: 8001 (avoids conflict with running daemon)
 
 ## Troubleshooting
 
